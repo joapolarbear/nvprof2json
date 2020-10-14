@@ -7,12 +7,23 @@ import os
 import sys
 import copy
 
-def main():
-    parser = argparse.ArgumentParser(description='Convert nvprof output to Google Event Trace compatible JSON.')
-    parser.add_argument('filename')
-    args = parser.parse_args()
+ACTIVITIES = [
+    "CUPTI_ACTIVITY_KIND_RUNTIME",
+    "CUPTI_ACTIVITY_KIND_MARKER",
+    "CUPTI_ACTIVITY_KIND_MEMCPY",
+    "CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL",
+    "CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL_ALT",
+]
 
-    conn = sqlite3.connect(args.filename)
+def nvprof2json(nvprof_path=None, dump=True, filters=None):
+    if nvprof_path is None:
+        parser = argparse.ArgumentParser(description='Convert nvprof output to Google Event Trace compatible JSON.')
+        parser.add_argument('filename')
+        args = parser.parse_args()
+        conn = sqlite3.connect(args.filename)
+    else:
+        conn = sqlite3.connect(nvprof_path)
+
     conn.row_factory = sqlite3.Row
 
     strings = {}
@@ -31,26 +42,27 @@ def main():
     correlationId: 13119
     returnValue: 0
     """
-    for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_RUNTIME"):
-        #eprintRow(row)
-        try:
-            cbid = Cbids(row["cbid"]).name
-        except ValueError:
-            cbid = str(row["cbid"])
-            eprint("Unrecognized cbid {}".format(cbid))
-        event = {
-                "name": cbid,
-                "ph": "X", # Complete Event (Begin + End event)
-                "cat": "cuda",
-                "ts": munge_time(row["start"]),
-                "dur": munge_time(row["end"] - row["start"]),
-                "tid": "Thread {}: Runtime API".format(row["threadId"]),
-                "pid": "[{}] Process".format(row["processId"]),
-                "args": {
-                    # TODO: More
-                    },
-                }
-        traceEvents.append(event)
+    if filters is None or "CUPTI_ACTIVITY_KIND_RUNTIME" in filters:
+        for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_RUNTIME"):
+            #eprintRow(row)
+            try:
+                cbid = Cbids(row["cbid"]).name
+            except ValueError:
+                cbid = str(row["cbid"])
+                eprint("Unrecognized cbid {}".format(cbid))
+            event = {
+                    "name": cbid,
+                    "ph": "X", # Complete Event (Begin + End event)
+                    "cat": "cuda",
+                    "ts": munge_time(row["start"]),
+                    "dur": munge_time(row["end"] - row["start"]),
+                    "tid": "Thread {}: Runtime API".format(row["threadId"]),
+                    "pid": "[{}] Process".format(row["processId"]),
+                    "args": {
+                        # TODO: More
+                        },
+                    }
+            traceEvents.append(event)
 
     # TODO DRIVER
 
@@ -64,40 +76,41 @@ def main():
     name: 3
     domain: 0
     """
-    for row in conn.execute(" ".join([
-            "SELECT",
-            ",".join([
-                "start.name AS name",
-                "start.timestamp AS start_time",
-                "end.timestamp AS end_time"
-            ]),
-            "FROM",
-            "(SELECT * FROM CUPTI_ACTIVITY_KIND_MARKER WHERE name != 0) AS start",
-            "LEFT JOIN",
-            "(SELECT * FROM CUPTI_ACTIVITY_KIND_MARKER WHERE name = 0) AS end",
-            "ON start.id = end.id"])):
-        event = {
-                "name": strings[row["name"]],
-                "cat": "cuda",
-                "ts": munge_time(row["start_time"]),
-                # Weirdly, these don't seem to be associated with a
-                # CPU/GPU.  I guess there's no CUDA Context available
-                # when you run these, so it makes sense.  But nvvp
-                # associates these with a GPU strangely enough
-                "tid": "Markers and Ranges",
-                "pid": "Markers and Ranges",
-                # TODO: NO COLORS FOR YOU (probably have to parse
-                # objectId)
-                "args": {
-                    # TODO: More
-                    },
-                }
-        if row["end_time"] is None:
-            event["ph"] = "I"
-        else:
-            event["ph"] = "X"
-            event["dur"] = munge_time(row["end_time"] - row["start_time"])
-        traceEvents.append(event)
+    if filters is None or "CUPTI_ACTIVITY_KIND_MARKER" in filters:
+        for row in conn.execute(" ".join([
+                "SELECT",
+                ",".join([
+                    "start.name AS name",
+                    "start.timestamp AS start_time",
+                    "end.timestamp AS end_time"
+                ]),
+                "FROM",
+                "(SELECT * FROM CUPTI_ACTIVITY_KIND_MARKER WHERE name != 0) AS start",
+                "LEFT JOIN",
+                "(SELECT * FROM CUPTI_ACTIVITY_KIND_MARKER WHERE name = 0) AS end",
+                "ON start.id = end.id"])):
+            event = {
+                    "name": strings[row["name"]],
+                    "cat": "cuda",
+                    "ts": munge_time(row["start_time"]),
+                    # Weirdly, these don't seem to be associated with a
+                    # CPU/GPU.  I guess there's no CUDA Context available
+                    # when you run these, so it makes sense.  But nvvp
+                    # associates these with a GPU strangely enough
+                    "tid": "Markers and Ranges",
+                    "pid": "Markers and Ranges",
+                    # TODO: NO COLORS FOR YOU (probably have to parse
+                    # objectId)
+                    "args": {
+                        # TODO: More
+                        },
+                    }
+            if row["end_time"] is None:
+                event["ph"] = "I"
+            else:
+                event["ph"] = "X"
+                event["dur"] = munge_time(row["end_time"] - row["start_time"])
+            traceEvents.append(event)
 
     """
     _id_: 1
@@ -114,49 +127,50 @@ def main():
     correlationId: 809
     runtimeCorrelationId: 0
     """
-    for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_MEMCPY"):
-        # copyKind:
-        #   1 - Memcpy HtoD
-        #   2 - Memcpy DtoH
-        #   8 - Memcpy DtoD
-        # flags: ???
-        #   0 - Sync
-        #   1 - Async
-        # srcKind/dstKind
-        #   1 - Pageable
-        #   2 - Page-locked ???
-        #   3 - Device
-        #eprintRow(row)
-        if row["copyKind"] == 1:
-            copyKind = "HtoD"
-        elif row["copyKind"] == 2:
-            copyKind = "DtoH"
-        elif row["copyKind"] == 8:
-            copyKind = "DtoD"
-        else:
-            copyKind = str(row["copyKind"])
-        if row["flags"] == 0:
-            flags = "sync"
-        elif row["flags"] == 1:
-            flags = "async"
-        else:
-            flags = str(row["flags"])
-        event = {
-                "name": "Memcpy {} [{}]".format(copyKind, flags),
-                "ph": "X", # Complete Event (Begin + End event)
-                "cat": "cuda",
-                "ts": munge_time(row["start"]),
-                "dur": munge_time(row["end"] - row["start"]),
-                "tid": "MemCpy ({})".format(copyKind),
-                # TODO: lookup GPU name.  This is tored in
-                # CUPTI_ACTIVITY_KIND_DEVICE
-                "pid": "[{}:{}] Overview".format(row["deviceId"], row["contextId"]),
-                "args": {
-                    "Size": sizeof_fmt(row["bytes"]),
-                    # TODO: More
-                    },
-                }
-        traceEvents.append(event)
+    if filters is None or "CUPTI_ACTIVITY_KIND_MEMCPY" in filters:
+        for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_MEMCPY"):
+            # copyKind:
+            #   1 - Memcpy HtoD
+            #   2 - Memcpy DtoH
+            #   8 - Memcpy DtoD
+            # flags: ???
+            #   0 - Sync
+            #   1 - Async
+            # srcKind/dstKind
+            #   1 - Pageable
+            #   2 - Page-locked ???
+            #   3 - Device
+            #eprintRow(row)
+            if row["copyKind"] == 1:
+                copyKind = "HtoD"
+            elif row["copyKind"] == 2:
+                copyKind = "DtoH"
+            elif row["copyKind"] == 8:
+                copyKind = "DtoD"
+            else:
+                copyKind = str(row["copyKind"])
+            if row["flags"] == 0:
+                flags = "sync"
+            elif row["flags"] == 1:
+                flags = "async"
+            else:
+                flags = str(row["flags"])
+            event = {
+                    "name": "Memcpy {} [{}]".format(copyKind, flags),
+                    "ph": "X", # Complete Event (Begin + End event)
+                    "cat": "cuda",
+                    "ts": munge_time(row["start"]),
+                    "dur": munge_time(row["end"] - row["start"]),
+                    "tid": "MemCpy ({})".format(copyKind),
+                    # TODO: lookup GPU name.  This is tored in
+                    # CUPTI_ACTIVITY_KIND_DEVICE
+                    "pid": "[{}:{}] Overview".format(row["deviceId"], row["contextId"]),
+                    "args": {
+                        "Size": sizeof_fmt(row["bytes"]),
+                        # TODO: More
+                        },
+                    }
+            traceEvents.append(event)
 
     # name: index into StringTable
     # What is thed difference between end and completed?
@@ -187,38 +201,42 @@ def main():
     gridId: 669
     name: 5
     """
-    for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"):
-        #eprint(strings[row["name"]])
-        #eprintRow(row)
-        event = {
-                "name": strings[row["name"]],
-                "ph": "X", # Complete Event (Begin + End event)
-                "cat": "cuda",
-                "ts": munge_time(row["start"]),
-                "dur": munge_time(row["end"] - row["start"]),
-                "tid": "Compute",
-                # TODO: lookup GPU name
-                "pid": "[{}:{}] Overview".format(row["deviceId"], row["contextId"]),
-                "args": {
-                    "Grid size": "[ {}, {}, {} ]".format(row["gridX"], row["gridY"], row["gridZ"]),
-                    "Block size": "[ {}, {}, {} ]".format(row["blockX"], row["blockY"], row["blockZ"]),
-                    # TODO: More
-                    },
-                }
-        alt_event = copy.deepcopy(event)
-        alt_event["tid"] = alt_event["name"]
-        alt_event["pid"] = "[{}:{}] Compute".format(row["deviceId"], row["contextId"])
-        traceEvents.append(event)
-        traceEvents.append(alt_event)
+    if filters is None or "CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL" in filters:
+        for row in conn.execute("SELECT * FROM CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"):
+            #eprint(strings[row["name"]])
+            #eprintRow(row)
+            event = {
+                    "name": strings[row["name"]],
+                    "ph": "X", # Complete Event (Begin + End event)
+                    "cat": "cuda",
+                    "ts": munge_time(row["start"]),
+                    "dur": munge_time(row["end"] - row["start"]),
+                    "tid": "Compute",
+                    # TODO: lookup GPU name
+                    "pid": "[{}:{}] Overview".format(row["deviceId"], row["contextId"]),
+                    "args": {
+                        "Grid size": "[ {}, {}, {} ]".format(row["gridX"], row["gridY"], row["gridZ"]),
+                        "Block size": "[ {}, {}, {} ]".format(row["blockX"], row["blockY"], row["blockZ"]),
+                        # TODO: More
+                        },
+                    }
+            traceEvents.append(event)
+            if filters is None or "CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL_ALT" in filters:
+                alt_event = copy.deepcopy(event)
+                alt_event["tid"] = alt_event["name"]
+                alt_event["pid"] = "[{}:{}] Compute".format(row["deviceId"], row["contextId"])
+                traceEvents.append(alt_event)
 
+    if dump:
+        json.dump(traceEvents, sys.stdout)
+        print()
 
-    json.dump(traceEvents, sys.stdout)
-    print()
+    return traceEvents
 
 def munge_time(t):
     """Take a time from nvprof and convert it into a chrome://tracing time."""
     # For strict correctness, divide by 1000, but this reduces accuracy.
-    return t # / 1000.
+    return t / 1000.
 
 def demangle(name):
     """Demangle a C++ identifier using c++filt"""
@@ -649,4 +667,5 @@ CUPTI_ACTIVITY_KIND_UNIFIED_MEMORY_COUNTER
         eprint("----")
 
 if __name__ == "__main__":
-    main()
+    filters = ["CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"]
+    nvprof2json(filters=filters)
