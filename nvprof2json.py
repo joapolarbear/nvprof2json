@@ -213,7 +213,7 @@ def nvprof2json(nvprof_path=None, dump=True, filters=None):
                     "cat": "cuda",
                     "ts": munge_time(row["start"]),
                     "dur": munge_time(row["end"] - row["start"]),
-                    "tid": "Compute",
+                    "tid": "Stream {}".format(row['streamId']),
                     # TODO: lookup GPU name
                     "pid": "[{}:{}] Overview".format(row["deviceId"], row["contextId"]),
                     "args": {
