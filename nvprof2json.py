@@ -7,6 +7,11 @@ import os
 import sys
 import copy
 
+parser = argparse.ArgumentParser(description='Convert nvprof output to Google Event Trace compatible JSON.')
+parser.add_argument('--filename')
+parser.add_argument('--filters', type='str', default=None)
+args = parser.parse_args()
+
 ACTIVITIES = [
     "CUPTI_ACTIVITY_KIND_RUNTIME",
     "CUPTI_ACTIVITY_KIND_MARKER",
@@ -17,9 +22,6 @@ ACTIVITIES = [
 
 def nvprof2json(nvprof_path=None, dump=True, filters=None):
     if nvprof_path is None:
-        parser = argparse.ArgumentParser(description='Convert nvprof output to Google Event Trace compatible JSON.')
-        parser.add_argument('filename')
-        args = parser.parse_args()
         conn = sqlite3.connect(args.filename)
     else:
         conn = sqlite3.connect(nvprof_path)
@@ -667,5 +669,8 @@ CUPTI_ACTIVITY_KIND_UNIFIED_MEMORY_COUNTER
         eprint("----")
 
 if __name__ == "__main__":
-    filters = ["CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"]
+    if args.filters is not None:
+        filters = [n for n in args.filters.split(',')]
+    else:
+        filters = ["CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"]
     nvprof2json(filters=filters)
