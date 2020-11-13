@@ -672,7 +672,7 @@ if __name__ == "__main__":
     if args.filters is not None:
         if args.filters.lower() == 'all':
             filters = ACTIVITIES
-        eles:
+        else:
             filters = [n for n in args.filters.split(',')]
     else:
         filters = ["CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"]
