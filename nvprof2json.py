@@ -671,6 +671,8 @@ CUPTI_ACTIVITY_KIND_UNIFIED_MEMORY_COUNTER
 if __name__ == "__main__":
     if args.filters is not None:
         filters = [n for n in args.filters.split(',')]
+    elif args.filters.lower() == 'all':
+        filters = ACTIVITIES
     else:
         filters = ["CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL"]
     nvprof2json(filters=filters)
