@@ -9,7 +9,7 @@ import copy
 
 parser = argparse.ArgumentParser(description='Convert nvprof output to Google Event Trace compatible JSON.')
 parser.add_argument('--filename')
-parser.add_argument('--filters', type='str', default=None)
+parser.add_argument('--filters', type=str, default=None)
 args = parser.parse_args()
 
 ACTIVITIES = [
