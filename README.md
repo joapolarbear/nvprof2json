@@ -16,9 +16,14 @@ Tested with CUDA 8.0.
 
 ```
 nvprof -o foo.nvvp your_program
-nvprof2json foo.nvvp > foo.json
+python3 nvprof2json --filename foo.nvvp --filter CUPTI_ACTIVITY_KIND_MEMCPY,CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL > foo.json
 # Open foo.json in chrome://tracing
 ```
+We can use `--filter` to avoid loading all traces, since sometimes CUDA trace file is large, and a 2.5 G `.json` file would be generated for a ~1G `.nvvp` file.
+1. `CUPTI_ACTIVITY_KIND_MEMCPY,CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL` corresponds to `... Overview` pid
+2. `all`: keep all traces
+3. `CUPTI_ACTIVITY_RUNTIME`, show the traces for each CUDA kernel by line.
+
 
 ## Known bugs
 
